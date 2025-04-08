@@ -1,0 +1,16 @@
+tty: true
+
+jsonOutput: true
+jsonIncludeOutputProperty: true
+
+metrics:
+  enabled: true
+  port: 8766
+
+serviceMonitor:
+  enabled: true
+
+customRules:
+  configMap: falco-custom-rules
+  rulesFile: custom-rule.yaml
+
