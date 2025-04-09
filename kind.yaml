@@ -1,3 +1,4 @@
+# kind.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -12,3 +13,6 @@ nodes:
         hostPort: 60000
         listenAddress: "127.0.0.1"
         protocol: tcp
+networking:
+  dnsSearch:
+    - 8.8.8.8

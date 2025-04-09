@@ -47,5 +47,17 @@ You can now use your cluster with:
 
 kubectl cluster-info --context kind-falco-lab
 
+
+make down
+./setup.sh down
+[+] Uninstalling Falco...
+release "falco" uninstalled
+[+] Uninstalling Prometheus & Grafana...
+release "kube-prometheus-stack" uninstalled
+[+] Deleting all kind clusters...
+[+] Deleting cluster: falco-lab
+Deleting cluster "falco-lab" ...
+Deleted nodes: ["falco-lab-control-plane"]
+[+] Cleanup complete.
 ```
 

@@ -1,64 +1,82 @@
 #!/bin/bash
-set -e
-
-CLUSTER_NAME="falco-lab"
+set -euo pipefail
 
 function delete_existing_cluster() {
-  if kind get clusters | grep -q "^$CLUSTER_NAME$"; then
-    echo "[INFO] Cluster '$CLUSTER_NAME' already exists. Deleting it..."
-    kind delete cluster --name "$CLUSTER_NAME"
+  if kind get clusters | grep -q "^falco-lab$"; then
+    echo "[INFO] Cluster 'falco-lab' already exists. Deleting it..."
+    kind delete cluster --name falco-lab || true
   fi
 }
 
-if [ "$1" == "up" ]; then
+if [ "${1:-}" == "up" ]; then
   echo "[+] Creating kind cluster..."
   delete_existing_cluster
-  kind create cluster --name "$CLUSTER_NAME" --config kind.yaml
+  kind create cluster --name falco-lab --config kind.yaml
+  kubectl cluster-info --context kind-falco-lab
 
   echo "[+] Creating namespace 'falco' and deploying custom rules ConfigMap..."
   kubectl create ns falco || true
+  kubectl delete configmap falco-custom-rules -n falco || true
   kubectl create configmap falco-custom-rules \
     --from-file=custom-rule.yaml=custom-rule.yaml \
-    -n falco || true
+    -n falco
 
-  echo "[+] Adding Falco Helm repo..."
+  echo "[+] Adding and updating Helm repos..."
   helm repo add falcosecurity https://falcosecurity.github.io/charts || true
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
   helm repo update
 
-  echo "[+] Installing Falco (with metrics enabled)..."
-  helm install falco falcosecurity/falco \
+  echo "[+] Installing Falco..."
+  helm upgrade --install falco falcosecurity/falco \
     --namespace falco \
-    -f values.yaml || echo "[INFO] Falco already installed"
+    -f values.yaml \
+    --set customRules.configMap=falco-custom-rules \
+    --set customRules.rulesFile=custom-rule.yaml
 
-  echo "[+] Deploying nginx workload (used for generating test traffic)..."
+  echo "[+] Deploying nginx workload..."
   kubectl create deployment nginx --image=nginx || true
 
-  if ! helm list -n monitoring | grep -q kube-prometheus-stack; then
-    echo "[+] Installing Prometheus & Grafana..."
-    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-    helm repo update
-    helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-      --namespace monitoring --create-namespace
-  else
-    echo "[INFO] Prometheus & Grafana already installed. Skipping Helm install."
-  fi
+  echo "[+] Installing Prometheus & Grafana..."
+  kubectl create ns monitoring || true
+
+  echo "[+] Waiting for Kind node to be ready..."
+  until kubectl get nodes | grep -q "Ready"; do
+    echo "[INFO] Waiting for node to be Ready..."
+    sleep 5
+  done
+
+  echo "[+] Pre-installing kube-prometheus-stack CRDs..."
+  rm -rf kube-prometheus-stack || true
+  helm pull prometheus-community/kube-prometheus-stack --untar
+  kubectl apply -f kube-prometheus-stack/crds || true
+  rm -rf kube-prometheus-stack
+
+  helm uninstall kube-prometheus-stack -n monitoring || true
+  sleep 5
+
+  helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+    --namespace monitoring --create-namespace --wait --timeout 5m || {
+    echo "[!] Failed to install kube-prometheus-stack. Check 'kubectl get events -n monitoring'"
+    exit 1
+  }
 
   echo "[+] Waiting for Grafana pod to be Ready..."
-  kubectl wait --for=condition=Ready --timeout=180s pods -l app.kubernetes.io/name=grafana -n monitoring
+  kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=grafana -n monitoring --timeout=180s || {
+    echo "[!] Grafana did not become ready in time."
+    exit 1
+  }
 
-  echo "[+] Creating or updating ConfigMap for Falco Dashboard..."
+  echo "[+] Loading custom dashboards and datasources..."
   kubectl create configmap falco-dashboard \
     --from-file=falco_dashboard.json=falco_dashboard.json \
-    -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+    -n monitoring || true
   kubectl label configmap falco-dashboard -n monitoring grafana_dashboard=1 --overwrite
 
-  echo "[+] Creating or updating ConfigMap for Grafana datasource..."
   kubectl create configmap grafana-datasource \
     --from-file=datasource.yaml=grafana_datasource.yaml \
-    -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+    -n monitoring || true
   kubectl label configmap grafana-datasource -n monitoring grafana_datasource=1 --overwrite
 
-  echo "[+] Upgrading kube-prometheus-stack to load dashboard and datasource..."
   helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack \
     --namespace monitoring \
     --reuse-values \
@@ -68,25 +86,24 @@ if [ "$1" == "up" ]; then
     --set grafana.sidecar.datasources.enabled=true \
     --set grafana.sidecar.datasources.label=grafana_datasource
 
-  echo "[+] Forwarding Grafana service on port 3000..."
+  echo "[+] Port-forwarding Grafana on http://localhost:3000..."
   kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80 &
 
-  echo "[+] Waiting for Falco pods to be Ready..."
-  kubectl wait --for=condition=Ready --timeout=180s pods -l app.kubernetes.io/name=falco -n falco
+  echo "[+] Waiting for Falco pod(s) to be Ready..."
+  kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=falco -n falco --timeout=180s
 
-  echo "[✅] Lab setup complete."
-  echo "[🌐] Grafana: http://localhost:3000"
-  echo "[🔐] Grafana admin password:"
-  echo "     kubectl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath=\"{.data.admin-password}\" | base64 -d ; echo"
-  echo "[⚙️ ] To generate events, run: ./generate_events.sh"
-  echo "[📖] Tailing Falco logs..."
-  kubectl logs -n falco -l app.kubernetes.io/name=falco -f
+  echo "[+] Lab setup complete."
+  echo "Grafana: http://localhost:3000"
+  echo "To get the Grafana admin password:"
+  echo "kubectl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath=\"{.data.admin-password}\" | base64 -d; echo"
+  echo "To tail Falco logs: make logs"
+  echo "To generate events: ./generate_events.sh"
 
-elif [ "$1" == "logs" ]; then
+elif [ "${1:-}" == "logs" ]; then
   echo "[+] Tailing Falco logs..."
   kubectl logs -n falco -l app.kubernetes.io/name=falco -f
 
-elif [ "$1" == "down" ]; then
+elif [ "${1:-}" == "down" ]; then
   echo "[+] Uninstalling Falco..."
   helm uninstall falco -n falco || true
 
@@ -96,11 +113,10 @@ elif [ "$1" == "down" ]; then
   echo "[+] Deleting all kind clusters..."
   for cluster in $(kind get clusters); do
     echo "[+] Deleting cluster: $cluster"
-    kind delete cluster --name "$cluster"
+    kind delete cluster --name "$cluster" || true
   done
 
-  echo "[✅] Cleanup complete."
-
+  echo "[+] Cleanup complete."
 else
   echo "Usage: $0 {up|logs|down}"
   exit 1

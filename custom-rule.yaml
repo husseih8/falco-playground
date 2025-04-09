@@ -1,0 +1,22 @@
+- required_engine_version: 10
+
+- rule: Detect curl in container
+  desc: Someone ran curl inside a container
+  condition: container and proc.name = "curl"
+  output: "curl detected: user=%user.name command=%proc.cmdline container=%container.id"
+  priority: WARNING
+  tags: [network, curl, suspicious]
+
+- rule: Read sensitive file /etc/shadow
+  desc: Detect any read access to /etc/shadow
+  condition: evt.type in (open, openat, openat2) and fd.name = /etc/shadow
+  output: "Sensitive file /etc/shadow read (command=%proc.cmdline user=%user.name)"
+  priority: WARNING
+  tags: [filesystem, sensitive]
+
+- rule: Write to /etc directory
+  desc: Detect write operations to any file under /etc
+  condition: evt.type in (open, openat, openat2) and evt.is_open_write=true and fd.name startswith /etc
+  output: "File in /etc written (command=%proc.cmdline user=%user.name)"
+  priority: WARNING
+  tags: [filesystem, custom]
