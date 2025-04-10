@@ -21,12 +21,20 @@ if [ "${1:-}" == "up" ]; then
   echo "[+] Adding and updating Helm repos..."
   helm repo add falcosecurity https://falcosecurity.github.io/charts || true
   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+  helm repo add grafana https://grafana.github.io/helm-charts || true
   helm repo update
 
   echo "[+] Installing Falco..."
   helm upgrade --install falco falcosecurity/falco \
     --namespace falco \
     -f values.yaml
+
+  echo "[+] Patching falco-metrics service to use port name 'http'..."
+  kubectl patch svc falco-metrics -n falco --type='json' \
+    -p='[{"op": "replace", "path": "/spec/ports/0/name", "value":"http"}]'
+
+  echo "[+] Applying Falco ServiceMonitor..."
+  kubectl apply -f falco-servicemonitor.yaml
 
   echo "[+] Deploying nginx workload..."
   kubectl create deployment nginx --image=nginx || true
@@ -37,17 +45,12 @@ if [ "${1:-}" == "up" ]; then
     sleep 5
   done
 
-  echo "[+] Pre-installing kube-prometheus-stack CRDs..."
-  rm -rf kube-prometheus-stack || true
-  helm pull prometheus-community/kube-prometheus-stack --untar
-  kubectl apply -f kube-prometheus-stack/crds || true
-  rm -rf kube-prometheus-stack
-
+  echo "[+] Installing kube-prometheus-stack..."
   helm uninstall kube-prometheus-stack -n monitoring || true
   sleep 5
 
   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-    --namespace monitoring --create-namespace --wait --timeout 5m || {
+    --namespace monitoring --create-namespace --wait --timeout 10m || {
     echo "[!] Failed to install kube-prometheus-stack. Check 'kubectl get events -n monitoring'"
     exit 1
   }
@@ -81,11 +84,15 @@ if [ "${1:-}" == "up" ]; then
   echo "[+] Port-forwarding Grafana on http://localhost:3000..."
   kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80 &
 
+  echo "[+] Port-forwarding Prometheus on http://localhost:9090..."
+  kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090 &
+
   echo "[+] Waiting for Falco pod(s) to be Ready..."
   kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=falco -n falco --timeout=180s
 
   echo "[+] Lab setup complete."
   echo "Grafana: http://localhost:3000"
+  echo "Prometheus: http://localhost:9090"
   echo "To get the Grafana admin password:"
   echo "kubectl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath=\"{.data.admin-password}\" | base64 -d; echo"
   echo "To tail Falco logs: make logs"
