@@ -12,6 +12,16 @@ Kubernetes automation scripts can be temperamental, especially on WSL with Kind,
 - Visualize real-time events and alerts in Grafana
 
 
+Running 
+```sh
+make up
+```
+Will bring the infrastructure to life and create these resources automatically, but doing some experiments with this there is some trouble with some of the steps, and the way I've sent my environment up with a bare-bones WSL running these services, its been very tempermental running the setup.sh script. 
+
+Due to this below is a manual way to set this Infrastructure up, which I've found to have helped me a lot in understanding how to troubleshoot some of these issues. 
+
+
+
 # Setting up the environment 
 
 ```sh
