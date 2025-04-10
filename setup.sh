@@ -14,12 +14,9 @@ if [ "${1:-}" == "up" ]; then
   kind create cluster --name falco-lab --config kind.yaml
   kubectl cluster-info --context kind-falco-lab
 
-  echo "[+] Creating namespace 'falco' and deploying custom rules ConfigMap..."
+  echo "[+] Creating namespaces..."
   kubectl create ns falco || true
-  kubectl delete configmap falco-custom-rules -n falco || true
-  kubectl create configmap falco-custom-rules \
-    --from-file=custom-rule.yaml=custom-rule.yaml \
-    -n falco
+  kubectl create ns monitoring || true
 
   echo "[+] Adding and updating Helm repos..."
   helm repo add falcosecurity https://falcosecurity.github.io/charts || true
@@ -29,15 +26,10 @@ if [ "${1:-}" == "up" ]; then
   echo "[+] Installing Falco..."
   helm upgrade --install falco falcosecurity/falco \
     --namespace falco \
-    -f values.yaml \
-    --set customRules.configMap=falco-custom-rules \
-    --set customRules.rulesFile=custom-rule.yaml
+    -f values.yaml
 
   echo "[+] Deploying nginx workload..."
   kubectl create deployment nginx --image=nginx || true
-
-  echo "[+] Installing Prometheus & Grafana..."
-  kubectl create ns monitoring || true
 
   echo "[+] Waiting for Kind node to be ready..."
   until kubectl get nodes | grep -q "Ready"; do

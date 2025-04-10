@@ -5,34 +5,77 @@ customRules:
     - rule: Detect curl in container
       desc: Someone ran curl inside a container
       condition: container and proc.name = "curl"
-      output: "curl detected: user=%user.name command=%proc.cmdline container=%container.id"
+      output: "⚠️ curl detected: user=%user.name command=%proc.cmdline container=%container.id"
       priority: WARNING
       tags: [network, curl, suspicious]
 
-    - rule: Read sensitive file /etc/shadow
-      desc: Detect any read access to /etc/shadow
-      condition: evt.type in (open, openat, openat2) and fd.name = /etc/shadow
+    - rule: "Read sensitive file /etc/shadow"
+      desc: "Detect any read access to /etc/shadow"
+      condition: "evt.type in (open, openat, openat2) and fd.name = /etc/shadow"
       output: "Sensitive file /etc/shadow read (command=%proc.cmdline user=%user.name)"
       priority: WARNING
       tags: [filesystem, sensitive]
 
-    - rule: Write to /etc directory
-      desc: Detect write operations to any file under /etc
-      condition: evt.type in (open, openat, openat2) and evt.is_open_write=true and fd.name startswith /etc
+    - rule: "Write to /etc directory"
+      desc: "Detect write operations to any file under /etc"
+      condition: "evt.type in (open, openat, openat2) and evt.is_open_write=true and fd.name startswith /etc"
       output: "File in /etc written (command=%proc.cmdline user=%user.name)"
       priority: WARNING
       tags: [filesystem, custom]
 
+    - rule: "Write to /etc/sudoers"
+      desc: "Detect any write to /etc/sudoers"
+      condition: "evt.type in (open, openat, openat2) and evt.is_open_write=true and fd.name = /etc/sudoers"
+      output: "Suspicious write to /etc/sudoers (command=%proc.cmdline user=%user.name)"
+      priority: CRITICAL
+      tags: [privilege_escalation, custom]
+
+    - rule: "Shell spawned in container"
+      desc: "Detect any shell spawned in a container"
+      condition: "proc.name in (sh, bash, zsh) and container.id != host"
+      output: "Shell spawned in container (command=%proc.cmdline, container=%container.id)"
+      priority: NOTICE
+      tags: [container, runtime]
+
+    - rule: "Privilege escalation via setuid binary"
+      desc: "Detect execution of setuid binaries (e.g., sudo, passwd) in a container"
+      condition: "proc.name in (sudo, passwd) and evt.type = execve and container.id != host"
+      output: "Setuid binary execution detected (command=%proc.cmdline user=%user.name)"
+      priority: CRITICAL
+      tags: [privilege_escalation, container]
+
+    - rule: shell_in_container
+      desc: notice shell activity within a container
+      condition: >
+        evt.type = execve and 
+        evt.dir = < and 
+        container.id != host and 
+        (proc.name = bash or
+        proc.name = ksh)    
+      output: >
+        shell in a container
+        (user=%user.name container_id=%container.id container_name=%container.name 
+        shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline)    
+      priority: WARNING
+
+    - rule: "Unexpected network connection from container"
+      desc: "Detect network connection attempts from container processes"
+      condition: "evt.type = connect and container.id != host"
+      output: "Network connection from container detected (command=%proc.cmdline, connection=%fd.name)"
+      priority: NOTICE
+      tags: [network, container]
+
 metrics:
   enabled: true
-  port: 8766
+  port: 8765  
 
 serviceMonitor:
   enabled: true
 
-metrics:
-  enabled: true
-  port: 8766
-
-serviceMonitor:
-  enabled: true
+serverFiles:
+  prometheus.yml:
+    scrape_configs:
+      - job_name: 'falco'
+        metrics_path: /metrics
+        static_configs:
+          - targets: ['falco-metrics.falco.svc.cluster.local:8765']
